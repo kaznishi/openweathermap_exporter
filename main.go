@@ -12,9 +12,7 @@ import (
 )
 
 var (
-	addr     = flag.String("listen-address", ":9999", "The address to listen on for HTTP requests.")
-	location = flag.String("location", "Tokyo", "The city name which you want to get data of")
-	apiKey   = flag.String("apiKey", "", "Your Key of OpenWeatherMap API")
+	addr = flag.String("listen-address", ":9999", "The address to listen on for HTTP requests.")
 )
 
 const (
@@ -103,12 +101,31 @@ func (c *openWeatherMapCollector) Collect(ch chan<- prometheus.Metric) {
 	)
 }
 
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	apiKey := r.URL.Query().Get("api_key")
+	if apiKey == "" {
+		http.Error(w, fmt.Sprintf("api_key is not specified."), http.StatusBadRequest)
+		return
+	}
+	location := r.URL.Query().Get("location")
+	if location == "" {
+		http.Error(w, fmt.Sprintf("location is not specified."), http.StatusBadRequest)
+		return
+	}
+
+	c := newOpenWeatherMapCollector(location, apiKey)
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(c)
+
+	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+	h.ServeHTTP(w, r)
+}
+
 func main() {
 	flag.Parse()
 
-	c := newOpenWeatherMapCollector(*location, *apiKey)
-	prometheus.MustRegister(c)
-
-	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metricsHandler(w, r)
+	})
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
