@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -9,56 +11,102 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var addr = flag.String("listen-address", ":9999", "The address to listen on for HTTP requests.")
+var (
+	addr     = flag.String("listen-address", ":9999", "The address to listen on for HTTP requests.")
+	location = flag.String("location", "Tokyo", "The city name which you want to get data of")
+	apiKey   = flag.String("apiKey", "", "Your Key of OpenWeatherMap API")
+)
 
 const (
 	namespace = "openweathermap"
 )
 
-type openWeatherMapCollector struct {
-	exampleCount prometheus.Counter
-	exampleGauge prometheus.Gauge
+type weatherData struct {
+	Main struct {
+		Temp     float64 `json:"temp"`
+		Pressure float64 `json:"pressure"`
+		Humidity float64 `json:"humidity"`
+	}
 }
 
-func newOpenWeatherMapCollector() *openWeatherMapCollector {
+type openWeatherMapCollector struct {
+	location string
+	apiKey   string
+
+	temp     prometheus.Gauge
+	pressure prometheus.Gauge
+	humidity prometheus.Gauge
+}
+
+func (c *openWeatherMapCollector) fetchFromAPI() (weatherData, error) {
+	var wd weatherData
+	url := fmt.Sprintf("http://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=metric", c.location, c.apiKey)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return wd, err
+	}
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&wd)
+	return wd, err
+}
+
+func newOpenWeatherMapCollector(location string, apiKey string) *openWeatherMapCollector {
 	return &openWeatherMapCollector{
-		exampleCount: prometheus.NewCounter(prometheus.CounterOpts{
+		location: location,
+		apiKey:   apiKey,
+		temp: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
-			Name:      "example_count",
-			Help:      "example counter help",
+			Name:      "temperature_celsius",
+			Help:      "Temperature in °C",
 		}),
-		exampleGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+		pressure: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
-			Name:      "example_gauge",
-			Help:      "example gauge help",
+			Name:      "pressure_hpa",
+			Help:      "Atmospheric pressure in hPa",
+		}),
+		humidity: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "humidity_percent",
+			Help:      "Humidity in Percent",
 		}),
 	}
 }
 
 func (c *openWeatherMapCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- c.exampleCount.Desc()
-	ch <- c.exampleGauge.Desc()
+	ch <- c.temp.Desc()
+	ch <- c.pressure.Desc()
+	ch <- c.humidity.Desc()
 }
 
 func (c *openWeatherMapCollector) Collect(ch chan<- prometheus.Metric) {
-	dummyStaticNumber := float64(1234)
+	wd, err := c.fetchFromAPI()
+	if err != nil {
+		log.Printf("%v", err)
+		return
+	}
 
 	ch <- prometheus.MustNewConstMetric(
-		c.exampleCount.Desc(),
-		prometheus.CounterValue,
-		float64(dummyStaticNumber),
+		c.temp.Desc(),
+		prometheus.GaugeValue,
+		wd.Main.Temp,
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.exampleGauge.Desc(),
+		c.pressure.Desc(),
 		prometheus.GaugeValue,
-		float64(dummyStaticNumber),
+		wd.Main.Pressure,
+	)
+	ch <- prometheus.MustNewConstMetric(
+		c.humidity.Desc(),
+		prometheus.GaugeValue,
+		wd.Main.Humidity,
 	)
 }
 
 func main() {
 	flag.Parse()
 
-	c := newOpenWeatherMapCollector()
+	c := newOpenWeatherMapCollector(*location, *apiKey)
 	prometheus.MustRegister(c)
 
 	http.Handle("/metrics", promhttp.Handler())
